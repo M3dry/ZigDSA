@@ -6,6 +6,7 @@ pub fn LinkedList(comptime T: type) type {
         const Node = struct {
             val: T,
             next: ?*Node = null,
+            prev: ?*Node = null,
 
             fn new(alloc: Allocator, val: T) !*Node {
                 const link = try alloc.create(Node);
@@ -14,24 +15,14 @@ pub fn LinkedList(comptime T: type) type {
             }
         };
 
-        const Tail = union(enum) {
-            tail: *Node,
-            head: void,
-            no_head: void,
-        };
-
         const Self = @This();
 
         head: ?*Node,
-        tail: Tail,
+        tail: ?*Node,
         alloc: Allocator,
 
         pub fn new(alloc: Allocator, val: ?T) !Self {
-            if (val == null) {
-                return Self{ .head = null, .tail = Tail.no_head, .alloc = alloc };
-            }
-            const node = try Node.new(alloc, val.?);
-            return Self{ .head = node, .tail = Tail.head, .alloc = alloc };
+            return Self{ .head = if (val == null) null else try Node.new(alloc, val.?), .tail = null, .alloc = alloc };
         }
 
         pub fn clean(self: *Self) void {
@@ -43,98 +34,92 @@ pub fn LinkedList(comptime T: type) type {
         }
 
         pub fn len(self: Self) usize {
-            return switch (self.tail) {
-                .no_head => 0,
-                .head => 1,
-                .tail => {
-                    var l: usize = 0;
-                    var tmp = self.head;
-                    while (tmp) |next| : (l += 1) {
-                        tmp = next.next;
-                    }
+            var l: usize = 0;
 
-                    return l;
-                },
-            };
+            var tmp = self.head;
+            while (tmp) |next|: (l += 1) {
+                tmp = next.next;
+            }
+
+            return l;
         }
 
         pub fn push_back(self: *Self, val: T) !void {
             const node = try Node.new(self.alloc, val);
-            switch (self.tail) {
-                .no_head => {
-                    self.head = node;
-                    self.tail = Tail.head;
-                },
-                .head => {
-                    self.head.?.next = node;
-                    self.tail = Tail{ .tail = node };
-                },
-                .tail => |tail| {
-                    tail.next = node;
-                    self.tail = Tail{ .tail = node };
-                },
+            
+            if (self.tail) |tail| {
+                node.prev = tail;
+                tail.next = node;
+                self.tail = node;
+            } else if (self.head) |head| {
+                node.prev = head;
+                head.next = node;
+                self.tail = node;
+            } else {
+                self.head = node;
             }
         }
 
         pub fn push_front(self: *Self, val: T) !void {
             const node = try Node.new(self.alloc, val);
-            switch (self.tail) {
-                .no_head => {
-                    self.head = node;
-                    self.tail = Tail.head;
-                },
-                .head => {
-                    node.next = self.head;
-                    self.head = node;
-                    self.tail = Tail{ .tail = self.head.?.next.? };
-                },
-                .tail => {
-                    node.next = self.head.?;
-                    self.head = node;
-                },
+            
+            if (self.head) |head| {
+                head.prev = node;
+                node.next = head;
+                self.head = node;
+            } else {
+                self.head = node;
             }
         }
 
         pub fn pop_back(self: *Self) ?T {
-            return switch (self.tail) {
-                .tail => |tail| {
-                    const val = tail.val;
-                    const new_tail = self._nth(self.len() - 2).?;
-                    new_tail.next = null;
-                    self.alloc.destroy(tail);
+            if (self.tail) |tail| {
+                const val = tail.val;
 
-                    if (self.len() == 1) {
-                        self.tail = Tail.head;
-                    }
+                if (self.len() == 2) {
+                    self.tail = null;
+                    self.head.?.next = null;
+                } else {
+                    tail.prev.?.next = null;
+                    self.tail = tail.prev;
+                }
 
-                    return val;
-                },
-                else => self.pop_front(),
-            };
+                self.alloc.destroy(tail);
+
+                return val;
+            } else if (self.head) |head| {
+                const val = head.val;
+
+                self.head = null;
+
+                self.alloc.destroy(head);
+
+                return val;
+            } else {
+                return null;
+            }
         }
 
         pub fn pop_front(self: *Self) ?T {
-            switch (self.tail) {
-                .no_head => return null,
-                .head => {
-                    const val = self.head.?.val;
-                    self.alloc.destroy(self.head.?);
-                    self.head = null;
-                    self.tail = Tail.no_head;
+            if (self.head) |head| {
+                const val = head.val;
 
-                    return val;
-                },
-                .tail => {
-                    const val = self.head.?.val;
-                    const head = self.head.?;
+                if (self.len() == 2) {
+                    const tail = self.tail.?;
+                    tail.prev = null;
+                    self.tail = null;
+                    self.head = tail;
+                } else {
+                    const next = self.head.?.next.?;
+                    next.prev = null;
+                    self.head = next;
+                }
 
-                    self.head = head.next;
-                    self.alloc.destroy(head);
+                self.alloc.destroy(head);
 
-                    if (self.len() == 1) self.tail = Tail.head;
-
-                    return val;
-                },
+                return val;
+            } else {
+                return null;
             }
         }
 
@@ -144,42 +129,44 @@ pub fn LinkedList(comptime T: type) type {
         }
 
         pub fn removeNth(self: *Self, n: usize) ?T {
-            return switch (self.tail) {
-                .no_head => return null,
-                .head => if (n == 0) {
-                    const val = self.head.?.val;
+            if (n == 0) {
+                return self.pop_front();
+            } else if (n == self.len() - 1) {
+                return self.pop_back();
+            } else {
+                const node_rm = self._nth(n) orelse return null;
+                const val = node_rm.val;
+                const node_next = node_rm.next.?;
+                const node_prev = node_rm.prev.?;
 
-                    self.alloc.destroy(self.head.?);
-                    self.head = null;
+                self.alloc.destroy(node_rm);
 
-                    return val;
-                } else null,
-                .tail => if (n == 0) {
-                    const val = self.head.?.val;
-                    const head = self.head.?;
+                node_prev.next = node_next;
+                node_next.prev = node_prev;
 
-                    self.head = head.next;
-                    self.alloc.destroy(head);
-
-                    return val;
-                } else {
-                    const node = self._nth(n) orelse return null;
-                    const val = node.val;
-
-                    (self._nth(n - 1) orelse unreachable).next = node.next;
-                    self.alloc.destroy(node);
-
-                    return val;
-                },
-            };
+                return val;
+            }
         }
 
         fn _nth(self: Self, n: usize) ?*Node {
-            var tmp = self.head orelse return null;
-            for (0..n + 1) |i| {
-                if (n == i) return tmp;
-                if (tmp.next == null) return null;
-                tmp = tmp.next.?;
+            const l = self.len();
+
+            if (l <= n) return null;
+
+            if (l > n * 2) {
+                var tmp = self.head orelse return null;
+                for (0..n + 1) |i| {
+                    if (n == i) return tmp;
+                    tmp = tmp.next orelse return null;
+                }
+            } else {
+                const stop = l - n;
+                var tmp = self.tail orelse return null;
+
+                for (0..stop) |i| {
+                    if (i == stop - 1) return tmp;
+                    tmp = tmp.prev orelse return null;
+                }
             }
 
             return null;
@@ -238,12 +225,8 @@ test "LinkedList" {
             try expectEq(list.pop_front(), null);
         }
         test "nth" {
-            var list = try List.new(alloc, 20);
+            var list = try List.from_arr(alloc, &[_]u8{ 50, 20, 30, 40});
             defer list.clean();
-
-            try list.push_back(30);
-            try list.push_back(40);
-            try list.push_front(50);
 
             try expectEq(list.nth(0), 50);
             try expectEq(list.nth(3), 40);
