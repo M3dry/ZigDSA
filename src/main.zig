@@ -1,5 +1,5 @@
 const std = @import("std");
-const List = @import("linked_list.zig").LinkedList(u16);
+const List = @import("doubly_linked_list.zig").DoublyLinkedList(u16);
 
 pub fn main() !void {
     const alloc = std.heap.page_allocator;
@@ -15,10 +15,10 @@ pub fn main() !void {
     defer alloc.free(arr);
 
     for (arr) |node| {
-        std.debug.print("{d}\n", .{node});
+        std.debug.print("{d}\n", .{ node.* });
     }
 
-    var list2 = try List.from_arr(&[_]u16{ 1000, 2000, 3000, 4000});
+    var list2 = try List.from_arr(alloc, &[_]u16{ 1000, 2000, 3000, 4000});
     defer list2.clean();
 
     var tmp = list2.head;

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub fn LinkedList(comptime T: type) type {
+pub fn DoublyLinkedList(comptime T: type) type {
     return struct {
         const Node = struct {
             val: T,
@@ -19,10 +19,11 @@ pub fn LinkedList(comptime T: type) type {
 
         head: ?*Node,
         tail: ?*Node,
+        len: usize,
         alloc: Allocator,
 
         pub fn new(alloc: Allocator, val: ?T) !Self {
-            return Self{ .head = if (val == null) null else try Node.new(alloc, val.?), .tail = null, .alloc = alloc };
+            return Self{ .head = if (val == null) null else try Node.new(alloc, val.?), .tail = null, .len = if (val == null) 0 else 1, .alloc = alloc };
         }
 
         pub fn clean(self: *Self) void {
@@ -31,17 +32,6 @@ pub fn LinkedList(comptime T: type) type {
                 tmp = next.next;
                 self.alloc.destroy(next);
             }
-        }
-
-        pub fn len(self: Self) usize {
-            var l: usize = 0;
-
-            var tmp = self.head;
-            while (tmp) |next|: (l += 1) {
-                tmp = next.next;
-            }
-
-            return l;
         }
 
         pub fn push_back(self: *Self, val: T) !void {
@@ -58,6 +48,8 @@ pub fn LinkedList(comptime T: type) type {
             } else {
                 self.head = node;
             }
+
+            self.len += 1;
         }
 
         pub fn push_front(self: *Self, val: T) !void {
@@ -70,13 +62,15 @@ pub fn LinkedList(comptime T: type) type {
             } else {
                 self.head = node;
             }
+
+            self.len += 1;
         }
 
         pub fn pop_back(self: *Self) ?T {
             if (self.tail) |tail| {
                 const val = tail.val;
 
-                if (self.len() == 2) {
+                if (self.len == 2) {
                     self.tail = null;
                     self.head.?.next = null;
                 } else {
@@ -86,6 +80,7 @@ pub fn LinkedList(comptime T: type) type {
 
                 self.alloc.destroy(tail);
 
+                self.len -= 1;
                 return val;
             } else if (self.head) |head| {
                 const val = head.val;
@@ -94,6 +89,7 @@ pub fn LinkedList(comptime T: type) type {
 
                 self.alloc.destroy(head);
 
+                self.len -= 1;
                 return val;
             } else {
                 return null;
@@ -104,7 +100,7 @@ pub fn LinkedList(comptime T: type) type {
             if (self.head) |head| {
                 const val = head.val;
 
-                if (self.len() == 2) {
+                if (self.len == 2) {
                     const tail = self.tail.?;
                     tail.prev = null;
                     self.tail = null;
@@ -117,21 +113,22 @@ pub fn LinkedList(comptime T: type) type {
 
                 self.alloc.destroy(head);
 
+                self.len -= 1;
                 return val;
             } else {
                 return null;
             }
         }
 
-        pub fn nth(self: Self, n: usize) ?T {
+        pub fn nth(self: Self, n: usize) ?*const T {
             const res = self._nth(n) orelse return null;
-            return res.val;
+            return &res.val;
         }
 
         pub fn removeNth(self: *Self, n: usize) ?T {
             if (n == 0) {
                 return self.pop_front();
-            } else if (n == self.len() - 1) {
+            } else if (n == self.len - 1) {
                 return self.pop_back();
             } else {
                 const node_rm = self._nth(n) orelse return null;
@@ -144,12 +141,13 @@ pub fn LinkedList(comptime T: type) type {
                 node_prev.next = node_next;
                 node_next.prev = node_prev;
 
+                self.len -= 1;
                 return val;
             }
         }
 
         fn _nth(self: Self, n: usize) ?*Node {
-            const l = self.len();
+            const l = self.len;
 
             if (l <= n) return null;
 
@@ -188,13 +186,13 @@ pub fn LinkedList(comptime T: type) type {
             };
         }
 
-        pub fn to_arr(self: *Self) ![]T {
-            const buf = try self.alloc.alloc(T, self.len());
+        pub fn to_arr(self: *Self) ![]*const T {
+            const buf = try self.alloc.alloc(*const T, self.len);
             var tmp = self.head;
             var i: usize = 0;
 
             while (tmp) |next|: (i += 1) {
-                buf[i] = next.val;
+                buf[i] = &next.val;
                 tmp = next.next;
             }
 
@@ -206,7 +204,7 @@ pub fn LinkedList(comptime T: type) type {
 test "LinkedList" {
     const expectEq = std.testing.expectEqual;
     const alloc = std.testing.allocator;
-    const List = LinkedList(u8);
+    const List = DoublyLinkedList(u8);
 
     _ = struct {
         test "push&pop" {
@@ -228,8 +226,8 @@ test "LinkedList" {
             var list = try List.from_arr(alloc, &[_]u8{ 50, 20, 30, 40});
             defer list.clean();
 
-            try expectEq(list.nth(0), 50);
-            try expectEq(list.nth(3), 40);
+            try expectEq(list.nth(0).?.*, 50);
+            try expectEq(list.nth(3).?.*, 40);
             try expectEq(list.nth(5), null);
             try expectEq(list.removeNth(1), 20);
             try expectEq(list.removeNth(5), null);
@@ -240,11 +238,11 @@ test "LinkedList" {
             defer list.clean();
 
             try list.push_back(100);
-            try expectEq(list.len(), 2);
+            try expectEq(list.len, 2);
             try list.push_back(101);
-            try expectEq(list.len(), 3);
+            try expectEq(list.len, 3);
             try list.push_back(102);
-            try expectEq(list.len(), 4);
+            try expectEq(list.len, 4);
         }
         test "arrays" {
             var list = try List.from_arr(alloc, &[_]u8{ 1, 2, 3, 4, 5 });
@@ -255,13 +253,13 @@ test "LinkedList" {
             
             var i: u8 = 1;
             for (arr) |node| {
-                try expectEq(node, i);
+                try expectEq(node.*, i);
                 i += 1;
             }
 
             i = 1;
             for (arr) |node| {
-                try expectEq(node, i);
+                try expectEq(node.*, i);
                 i += 1;
             }
         }
