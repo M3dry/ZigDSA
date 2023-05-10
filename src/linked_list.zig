@@ -1,12 +1,13 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
-pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
+pub fn LinkedList(comptime T: type) type {
     return struct {
         const Node = struct {
             val: T,
             next: ?*Node = null,
 
-            fn new(val: T) !*Node {
+            fn new(alloc: Allocator, val: T) !*Node {
                 const link = try alloc.create(Node);
                 link.* = .{ .val = val };
                 return link;
@@ -28,20 +29,21 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
 
         head: ?*Node,
         tail: Tail,
+        alloc: Allocator,
 
-        pub fn new(val: ?T) !Self {
+        pub fn new(alloc: Allocator, val: ?T) !Self {
             if (val == null) {
-                return Self{ .head = null, .tail = Tail.no_head };
+                return Self{ .head = null, .tail = Tail.no_head, .alloc = alloc };
             }
-            const node = try Node.new(val.?);
-            return Self{ .head = node, .tail = Tail.head };
+            const node = try Node.new(alloc, val.?);
+            return Self{ .head = node, .tail = Tail.head, .alloc = alloc };
         }
 
         pub fn clean(self: *Self) void {
             var tmp = self.head;
             while (tmp) |next| {
                 tmp = next.next;
-                alloc.destroy(next);
+                self.alloc.destroy(next);
             }
         }
 
@@ -62,7 +64,7 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
         }
 
         pub fn push_back(self: *Self, val: T) !void {
-            const node = try Node.new(val);
+            const node = try Node.new(self.alloc, val);
             switch (self.tail) {
                 .no_head => {
                     self.head = node;
@@ -80,7 +82,7 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
         }
 
         pub fn push_front(self: *Self, val: T) !void {
-            const node = try Node.new(val);
+            const node = try Node.new(self.alloc, val);
             switch (self.tail) {
                 .no_head => {
                     self.head = node;
@@ -104,7 +106,7 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
                     const val = tail.val;
                     const new_tail = self._nth(self.len() - 2).?;
                     new_tail.next = null;
-                    alloc.destroy(tail);
+                    self.alloc.destroy(tail);
 
                     if (self.len() == 1) {
                         self.tail = Tail.head;
@@ -121,7 +123,7 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
                 .no_head => return null,
                 .head => {
                     const val = self.head.?.val;
-                    alloc.destroy(self.head.?);
+                    self.alloc.destroy(self.head.?);
                     self.head = null;
                     self.tail = Tail.no_head;
 
@@ -132,7 +134,7 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
                     const head = self.head.?;
 
                     self.head = head.next;
-                    alloc.destroy(head);
+                    self.alloc.destroy(head);
 
                     if (self.len() == 1) self.tail = Tail.head;
 
@@ -152,7 +154,7 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
                 .head => if (n == 0) {
                     const val = self.head.?.val;
 
-                    alloc.destroy(self.head.?);
+                    self.alloc.destroy(self.head.?);
                     self.head = null;
 
                     return val;
@@ -162,7 +164,7 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
                     const head = self.head.?;
 
                     self.head = head.next;
-                    alloc.destroy(head);
+                    self.alloc.destroy(head);
 
                     return val;
                 } else {
@@ -170,7 +172,7 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
                     const val = node.val;
 
                     (self._nth(n - 1) orelse unreachable).next = node.next;
-                    alloc.destroy(node);
+                    self.alloc.destroy(node);
 
                     return val;
                 },
@@ -188,36 +190,45 @@ pub fn LinkedList(comptime alloc: std.mem.Allocator, comptime T: type) type {
             return null;
         }
 
-        const LinkedListIterator = struct {
-            current: ?*Node,
+        pub fn from_arr(alloc: Allocator, arr: []const T) !Self {
+            return switch (arr.len) {
+                0 => try Self.new(alloc, null),
+                1 => try Self.new(alloc, arr[0]),
+                else => {
+                    var self = try Self.new(alloc, arr[0]);
 
-            pub fn next(self: *LinkedListIterator) ?T {
-                const ret = self.current orelse return null;
-                self.current = ret.next;
+                    for (arr[1..]) |val| {
+                        try self.push_back(val);
+                    }
 
-                return ret.val;
+                    return self;
+                }
+            };
+        }
+
+        pub fn to_arr(self: *Self) ![]T {
+            const buf = try self.alloc.alloc(T, self.len());
+            var tmp = self.head;
+            var i: usize = 0;
+
+            while (tmp) |next|: (i += 1) {
+                buf[i] = next.val;
+                tmp = next.next;
             }
 
-            pub fn clean(self: *LinkedListIterator) void {
-                alloc.destroy(self);
-            }
-        };
-
-        pub fn iter(self: *Self) !*LinkedListIterator {
-            const iterator = try alloc.create(LinkedListIterator);
-            iterator.* = .{ .current = self.head };
-            return iterator;
+            return buf;
         }
     };
 }
 
 test "LinkedList" {
     const expectEq = std.testing.expectEqual;
-    const List = LinkedList(std.testing.allocator, u8);
+    const alloc = std.testing.allocator;
+    const List = LinkedList(u8);
 
     _ = struct {
         test "push&pop" {
-            var list = try List.new(100);
+            var list = try List.new(alloc, 100);
             defer list.clean();
 
             try list.push_back(150);
@@ -232,7 +243,7 @@ test "LinkedList" {
             try expectEq(list.pop_front(), null);
         }
         test "nth" {
-            var list = try List.new(20);
+            var list = try List.new(alloc, 20);
             defer list.clean();
 
             try list.push_back(30);
@@ -247,7 +258,7 @@ test "LinkedList" {
             try expectEq(list.removeNth(2), 40);
         }
         test "len" {
-            var list = try List.new(50);
+            var list = try List.new(alloc, 50);
             defer list.clean();
 
             try list.push_back(100);
@@ -257,22 +268,23 @@ test "LinkedList" {
             try list.push_back(102);
             try expectEq(list.len(), 4);
         }
-        test "iter" {
-            var list1 = try List.new(1);
-            var list2 = try List.new(null);
-            defer list1.clean();
-            defer list2.clean();
+        test "arrays" {
+            var list = try List.from_arr(alloc, &[_]u8{ 1, 2, 3, 4, 5 });
+            defer list.clean();
 
-            try list1.push_back(2);
-            try list1.push_back(3);
-            try list1.push_back(4);
-
-            const iter = try list1.iter();
-            defer iter.clean();
+            const arr = try list.to_arr();
+            defer alloc.free(arr);
             
             var i: u8 = 1;
-            while (iter.next()) |node|: (i += 1) {
+            for (arr) |node| {
                 try expectEq(node, i);
+                i += 1;
+            }
+
+            i = 1;
+            for (arr) |node| {
+                try expectEq(node, i);
+                i += 1;
             }
         }
     };
